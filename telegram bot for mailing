@@ -1,0 +1,108 @@
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+import logging
+import sqlite3
+
+# Включение логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Ваш токен от BotFather
+TOKEN = 'your token'
+
+# ID администратора
+ADMIN_USER_ID = your admin id, get there tg bot: get my id
+
+# Инициализация базы данных
+def init_db():
+    conn = sqlite3.connect('groups.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS groups (chat_id INTEGER PRIMARY KEY, title TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# Функция старта
+async def start(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_text('Привет! Отправь мне сообщение, и я пересылаю его в группы.')
+
+# Функция пересылки сообщений
+async def forward_message(update: Update, context: CallbackContext) -> None:
+    if update.message.from_user.id != ADMIN_USER_ID:
+        await update.message.reply_text('Только администратор может пересылать сообщения.')
+        return
+
+    if update.message.text:
+        message_text = update.message.text
+        conn = sqlite3.connect('groups.db')
+        c = conn.cursor()
+        c.execute('SELECT chat_id FROM groups')
+        group_chat_ids = [row[0] for row in c.fetchall()]
+        conn.close()
+
+        if not group_chat_ids:
+            await update.message.reply_text('Нет групп для пересылки сообщений.')
+            return
+
+        for chat_id in group_chat_ids:
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=message_text)
+                await update.message.reply_text(f'Сообщение отправлено в группу ({chat_id})')
+            except Exception as e:
+                logger.error(f'Ошибка при пересылке сообщения в группу {chat_id}: {e}')
+                await update.message.reply_text(f'Не удалось отправить сообщение в группу {chat_id}')
+    else:
+        await update.message.reply_text('Сообщение должно содержать текст.')
+
+# Функция обработки команды /get_id
+async def get_id(update: Update, context: CallbackContext) -> None:
+    chat = update.message.chat
+    if chat.type in ['group', 'supergroup']:  # Проверяем, что это группа или супергруппа
+        conn = sqlite3.connect('groups.db')
+        c = conn.cursor()
+        c.execute('INSERT OR IGNORE INTO groups (chat_id, title) VALUES (?, ?)', (chat.id, chat.title))
+        conn.commit()
+        conn.close()
+
+        message_text = f'ID группы: {chat.id}\nНазвание группы: {chat.title}'
+        await context.bot.send_message(chat_id=ADMIN_USER_ID, text=message_text)
+        await update.message.reply_text('ID этой группы отправлен администратору.')
+
+# Функция для вывода всех chat_id групп
+async def list_groups(update: Update, context: CallbackContext) -> None:
+    if update.message.from_user.id == ADMIN_USER_ID:
+        conn = sqlite3.connect('groups.db')
+        c = conn.cursor()
+        c.execute('SELECT chat_id FROM groups')
+        group_chat_ids = [row[0] for row in c.fetchall()]
+        conn.close()
+
+        if group_chat_ids:
+            group_list = '\n'.join([str(chat_id) for chat_id in group_chat_ids])
+            await update.message.reply_text(f'Список групповых chat ID:\n{group_list}')
+        else:
+            await update.message.reply_text('Список групп пуст.')
+    else:
+        await update.message.reply_text('Только администратор может просматривать список групп.')
+
+def main() -> None:
+    # Создание Application и передача ему токена вашего бота
+    application = Application.builder().token(TOKEN).build()
+
+    # Обработчики команд
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("list_groups", list_groups))
+    application.add_handler(CommandHandler("get_id", get_id))
+
+    # Обработчики сообщений
+    application.add_handler(MessageHandler(filters.TEXT, forward_message))
+
+    # Запуск бота
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
